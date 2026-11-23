@@ -11,6 +11,7 @@ import Database from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as provider from "./providers/xpag.js";
 
 const env = process.env;
@@ -43,6 +44,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT, result_id TEXT, name TEXT, data TEXT, created_at TEXT DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS webhook_log (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, ok INTEGER, note TEXT, payload TEXT, created_at TEXT DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS spend (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT NOT NULL, label TEXT DEFAULT '', spend REAL DEFAULT 0, impressions INTEGER DEFAULT 0, clicks INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')));
 CREATE INDEX IF NOT EXISTS idx_orders_ref ON orders(reference);
 CREATE INDEX IF NOT EXISTS idx_orders_clabe ON orders(clabe);
 `);
@@ -86,7 +88,8 @@ app.post("/api/orders", botKey, async (req, res) => {
   const id = shortId();
   q.insert.run({ id, product, parent_id: b.parentOrderId || null, result_id: b.resultId || null, country: b.country || "MX", amount,
     name: b.name || null, email: b.email || null, phone: b.phone || null, consent: /s[ií]/i.test(String(b.consent || "")) ? 1 : 0,
-    utm: JSON.stringify({ s: b.utm_source, m: b.utm_medium, c: b.utm_campaign, ct: b.utm_content }),
+    utm: JSON.stringify({ s: b.utm_source, m: b.utm_medium, c: b.utm_campaign, ct: b.utm_content, t: b.utm_term,
+      cid: b.campaign_id, aid: b.adset_id, adid: b.ad_id, pl: b.placement }),
     fbc: b.fbclid ? `fb.1.${Date.now()}.${b.fbclid}` : null });
   try {
     const ch = await provider.createSpeiCharge({ orderId: id, amount, currency: "MXN", name: b.name, email: b.email, description: P.name });
@@ -186,7 +189,9 @@ async function sendCapi(orderId, eventName) {
   if (!o || (eventName === "Purchase" && o.capi_sent)) return;
   const user_data = { country: [sha256("mx")] };
   if (o.email) user_data.em = [sha256(o.email)];
-  if (o.phone) user_data.ph = [sha256(String(o.phone).replace(/\D/g, ""))];
+  if (o.phone) { let ph = String(o.phone).replace(/\D/g, "").replace(/^0+/, ""); if (ph.length === 10) ph = "52" + ph; if (ph.length >= 10) user_data.ph = [sha256(ph)]; }
+  if (o.name) { const parts = String(o.name).trim().toLowerCase().split(/\s+/); user_data.fn = [sha256(parts[0])]; if (parts.length > 1) user_data.ln = [sha256(parts[parts.length - 1])]; }
+  user_data.external_id = [sha256(o.email || o.id)];
   if (o.fbc) user_data.fbc = o.fbc;
   const value = eventName === "Purchase" ? (o.paid_amount || o.amount) : o.amount;
   const body = { data: [{ event_name: eventName, event_time: Math.floor(Date.now() / 1000), action_source: "website",
@@ -204,5 +209,55 @@ app.get("/api/report", botKey, (_req, res) => res.json({
 }));
 app.get("/api/abandoned", botKey, (_req, res) => res.json(db.prepare(`SELECT id, product, name, email, phone, amount, clabe, reference, created_at FROM orders
   WHERE consent=1 AND status='awaiting_payment' AND created_at < datetime('now','-1 hour') AND created_at > datetime('now','-3 days')`).all()));
+
+// ---------- Panel de métricas (admin) ----------
+// Gasto/impresiones/clics se cargan a mano desde el Administrador de anuncios; el resto sale de los datos del embudo.
+const adminKey = (req, res, next) => env.ADMIN_KEY && safeEq(req.get("x-admin-key"), env.ADMIN_KEY) ? next() : res.status(401).json({ error: "unauthorized" });
+const here = path.dirname(fileURLToPath(import.meta.url));
+app.get("/admin", (_req, res) => res.sendFile(path.join(here, "admin.html")));
+const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ""));
+const tzMod = (req) => { const t = Math.max(-12, Math.min(14, Number(req.query.tz ?? -3))); return `${t >= 0 ? "+" : ""}${Math.trunc(t)} hours`; };
+const todayStr = (mod) => db.prepare(`SELECT date('now', ?) d`).get(mod).d;
+
+app.get("/admin/api/metrics", adminKey, (req, res) => {
+  const mod = tzMod(req);
+  const to = isDay(req.query.to) ? req.query.to : todayStr(mod);
+  const from = isDay(req.query.from) ? req.query.from : to;
+  const evs = db.prepare(`SELECT name, COUNT(*) n, COUNT(DISTINCT COALESCE(result_id, order_id, id)) u FROM events
+    WHERE date(created_at, ?) BETWEEN ? AND ? GROUP BY name`).all(mod, from, to);
+  const orders = db.prepare(`SELECT product, status, COUNT(*) n, COALESCE(SUM(amount),0) amount, COALESCE(SUM(paid_amount),0) paid FROM orders
+    WHERE date(created_at, ?) BETWEEN ? AND ? GROUP BY product, status`).all(mod, from, to);
+  const delivery = db.prepare(`SELECT COUNT(*) paid, SUM(CASE WHEN downloads>0 THEN 1 ELSE 0 END) downloaded,
+    SUM(typebot_resumed) resumed, SUM(capi_sent) capi FROM orders WHERE status='paid' AND date(created_at, ?) BETWEEN ? AND ?`).get(mod, from, to);
+  const sp = db.prepare(`SELECT COALESCE(SUM(spend),0) spend, COALESCE(SUM(impressions),0) impressions, COALESCE(SUM(clicks),0) clicks FROM spend WHERE day BETWEEN ? AND ?`).get(from, to);
+  const daily = db.prepare(`SELECT date(created_at, ?) day, COUNT(*) n, COALESCE(SUM(paid_amount),0) paid FROM orders
+    WHERE status='paid' AND product='ebook' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY day ORDER BY day`).all(mod, mod, from, to);
+  const byCreative = db.prepare(`SELECT COALESCE(NULLIF(json_extract(utm,'$.ct'),''),'(sin utm)') ct, COUNT(*) created,
+    SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END) paid, COALESCE(SUM(CASE WHEN status='paid' THEN paid_amount END),0) revenue
+    FROM orders WHERE product='ebook' AND date(created_at, ?) BETWEEN ? AND ? GROUP BY ct ORDER BY paid DESC, created DESC`).all(mod, from, to);
+  const spendByLabel = db.prepare(`SELECT label, COALESCE(SUM(spend),0) spend, COALESCE(SUM(impressions),0) impressions, COALESCE(SUM(clicks),0) clicks FROM spend
+    WHERE day BETWEEN ? AND ? GROUP BY label`).all(from, to);
+  res.json({ from, to, events: evs, orders, delivery, spend: sp, daily, byCreative, spendByLabel });
+});
+
+app.get("/admin/api/orders", adminKey, (req, res) => {
+  const mod = tzMod(req);
+  const to = isDay(req.query.to) ? req.query.to : todayStr(mod);
+  const from = isDay(req.query.from) ? req.query.from : to;
+  const rows = db.prepare(`SELECT id, product, status, amount, paid_amount, name, email, phone, consent, downloads, typebot_resumed, capi_sent,
+    download_token, utm, created_at, updated_at FROM orders WHERE date(created_at, ?) BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 300`).all(mod, from, to);
+  res.json(rows.map((o) => ({ ...o, downloadUrl: o.status === "paid" && o.download_token ? `${env.PUBLIC_BASE_URL}/d/${o.download_token}` : "", download_token: undefined })));
+});
+
+app.get("/admin/api/spend", adminKey, (_req, res) => res.json(db.prepare(`SELECT id, day, label, spend, impressions, clicks FROM spend ORDER BY day DESC, id DESC LIMIT 200`).all()));
+app.post("/admin/api/spend", adminKey, (req, res) => {
+  const b = req.body || {}; const num = (v) => Math.max(0, Number(String(v ?? 0).replace(",", ".")) || 0);
+  if (!isDay(b.day)) return res.status(400).json({ error: "invalid_day" });
+  const r = db.prepare(`INSERT INTO spend (day,label,spend,impressions,clicks) VALUES (?,?,?,?,?)`)
+    .run(b.day, String(b.label || "").slice(0, 80), num(b.spend), Math.round(num(b.impressions)), Math.round(num(b.clicks)));
+  res.json({ ok: true, id: r.lastInsertRowid });
+});
+app.delete("/admin/api/spend/:id", adminKey, (req, res) => { db.prepare(`DELETE FROM spend WHERE id=?`).run(Number(req.params.id) || 0); res.json({ ok: true }); });
+
 app.get("/health", (_req, res) => res.json({ ok: true, provider: provider.NAME }));
 app.listen(env.PORT || 3000, () => console.log("Backend en el puerto " + (env.PORT || 3000) + " · proveedor " + provider.NAME));
