@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Painel · Carpintería Fácil</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a65;--line:#e4e2dc;--acc:#e4572e;--ok:#1f8a4c;--bad:#c0392b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+h1{font-size:17px;margin:0}h2{font-size:15px;margin:0 0 10px}
+main{max-width:1100px;margin:0 auto;padding:18px 16px 60px;display:grid;gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
+label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--mute)}
+input,select,button{font:inherit;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
+input{min-width:0}button{cursor:pointer}button.p{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+button.sm{padding:3px 8px;font-size:12px}button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:10px 12px}.kpi b{display:block;font-size:20px;margin-top:2px}.kpi span{font-size:12px;color:var(--mute)}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}th{font-size:12px;color:var(--mute);font-weight:600}
+.scroll{overflow-x:auto}
+.funnel{display:grid;gap:6px}.step{display:grid;grid-template-columns:150px 1fr 120px;gap:10px;align-items:center}
+.bar{height:20px;background:#efece6;border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--acc);min-width:2px}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;background:#eee}
+.pill.paid{background:#dcf3e5;color:var(--ok)}.pill.awaiting_payment{background:#fdf0d5;color:#8a6410}.pill.error,.pill.expired,.pill.underpaid{background:#fadbd8;color:var(--bad)}
+.hint{font-size:12px;color:var(--mute)}#login{max-width:360px;margin:12vh auto;display:grid;gap:10px}
+.hide{display:none!important}
+@media(max-width:620px){.step{grid-template-columns:100px 1fr 90px}}
+</style>
+</head>
+<body>
+<div id="login" class="card">
+  <h1>Painel · Carpintería Fácil</h1>
+  <label>Clave de administrador (ADMIN_KEY)<input id="key" type="password" autocomplete="off"></label>
+  <button class="p" id="enter">Entrar</button>
+  <div class="hint" id="loginMsg"></div>
+</div>
+
+<div id="app" class="hide">
+<header>
+  <h1>Painel · Carpintería Fácil</h1>
+  <div class="row">
+    <button class="sm" data-r="0">Hoje</button><button class="sm" data-r="1">Ontem</button>
+    <button class="sm" data-r="7">7 dias</button><button class="sm" data-r="30">30 dias</button>
+    <label>De<input type="date" id="from"></label><label>Até<input type="date" id="to"></label>
+    <button id="go" class="p">Atualizar</button>
+  </div>
+</header>
+<main>
+  <section class="card">
+    <h2>Configuração do cálculo</h2>
+    <div class="row">
+      <label>Moeda do gasto no Meta<select id="cur"><option value="MXN">MXN</option><option value="BRL">BRL</option><option value="USD">USD</option></select></label>
+      <label>1 unidade da moeda = quantos MXN<input id="rate" type="number" step="0.0001" value="1" style="width:120px"></label>
+      <label>Taxa do meio de pagamento (%)<input id="fee" type="number" step="0.01" value="0" style="width:120px"></label>
+      <label>Fuso (horas vs UTC)<input id="tz" type="number" step="1" value="-3" style="width:80px"></label>
+    </div>
+    <div class="hint">O gasto digitado fica na moeda do Meta e é convertido para MXN aqui. Fica salvo neste navegador. O lucro é estimado: receita menos taxa menos gasto.</div>
+  </section>
+
+  <section class="card">
+    <h2>Lançar gasto do Gerenciador</h2>
+    <div class="row">
+      <label>Dia<input type="date" id="sDay"></label>
+      <label>Campanha / criativo (opcional)<input id="sLabel" placeholder="ex.: C01 polvo" style="width:180px"></label>
+      <label>Gasto<input id="sSpend" type="number" step="0.01" style="width:110px"></label>
+      <label>Impressões<input id="sImp" type="number" style="width:120px"></label>
+      <label>Cliques no link (opcional)<input id="sClk" type="number" style="width:120px"></label>
+      <button class="p" id="sAdd">Adicionar</button>
+    </div>
+    <div class="scroll" style="margin-top:10px"><table id="spendTbl"><thead><tr><th>Dia</th><th>Rótulo</th><th>Gasto</th><th>Impressões</th><th>Cliques</th><th></th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card"><h2>Resultado do período</h2><div class="kpis" id="kpis"></div></section>
+  <section class="card"><h2>Funil</h2><div class="funnel" id="funnel"></div><div class="hint" id="fhint"></div></section>
+  <section class="card"><h2>Por criativo</h2><div class="scroll"><table id="crTbl"><thead><tr><th>Criativo (utm_content)</th><th>Gasto (MXN)</th><th>Impressões</th><th>Checkouts</th><th>Vendas</th><th>Receita</th><th>CPA</th><th>ROAS</th></tr></thead><tbody></tbody></table></div><div class="hint">O gasto só aparece aqui se o "Campanha / criativo" do lançamento for igual ao nome do anúncio (utm_content). Linhas sem UTM são vendas sem origem identificada.</div></section>
+  <section class="card"><h2>Entrega das vendas pagas</h2><div class="kpis" id="deliv"></div></section>
+  <section class="card"><h2>Pedidos</h2><div class="scroll"><table id="ordTbl"><thead><tr><th>Data</th><th>Pedido</th><th>Produto</th><th>Status</th><th>Valor</th><th>Cliente</th><th>Baixou</th><th>Bot</th><th>Meta</th><th>Link</th></tr></thead><tbody></tbody></table></div></section>
+</main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let KEY = sessionStorage.getItem("ak") || "";
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+const load = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch (e) { return d; } };
+const fmt = (n, d = 0) => (isFinite(n) ? n : 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
+const mxn = (n) => "$" + fmt(n, 2);
+const pct = (a, b) => (b > 0 ? fmt((a / b) * 100, 1) + "%" : "—");
+const div = (a, b) => (b > 0 ? a / b : NaN);
+const api = async (p, opt = {}) => {
+  const r = await fetch(p, { ...opt, headers: { "x-admin-key": KEY, "Content-Type": "application/json" } });
+  if (r.status === 401) { sessionStorage.removeItem("ak"); location.reload(); throw new Error("401"); }
+  return r.json();
+};
+const ymd = (d) => d.toISOString().slice(0, 10);
+const todayLocal = () => { const t = Number($("tz").value || -3); return ymd(new Date(Date.now() + t * 3600e3)); };
+const shift = (s, days) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + days); return ymd(d); };
+const el = (tag, txt, cls) => { const e = document.createElement(tag); if (txt !== undefined) e.textContent = txt; if (cls) e.className = cls; return e; };
+
+function setRange(days) {
+  const t = todayLocal();
+  if (days === 1) { $("from").value = $("to").value = shift(t, -1); }
+  else { $("to").value = t; $("from").value = shift(t, -(days === 0 ? 0 : days - 1)); }
+  refresh();
+}
+document.querySelectorAll("[data-r]").forEach((b) => b.onclick = () => setRange(Number(b.dataset.r)));
+$("go").onclick = refresh;
+["cur", "rate", "fee", "tz"].forEach((id) => { $(id).value = load("cf_" + id, $(id).value); $(id).onchange = () => { store("cf_" + id, $(id).value); refresh(); }; });
+
+$("enter").onclick = async () => {
+  KEY = $("key").value.trim();
+  const r = await fetch("/admin/api/spend", { headers: { "x-admin-key": KEY } });
+  if (r.status === 401) { $("loginMsg").textContent = "Clave incorrecta."; return; }
+  sessionStorage.setItem("ak", KEY); start();
+};
+$("key").addEventListener("keydown", (e) => e.key === "Enter" && $("enter").click());
+
+function kpi(label, value, cls) { const d = el("div", undefined, "kpi"); d.append(el("span", label)); const b = el("b", value); if (cls) b.className = cls; d.append(b); return d; }
+
+async function refresh() {
+  const from = $("from").value, to = $("to").value, tz = $("tz").value || -3;
+  const qs = `from=${from}&to=${to}&tz=${tz}`;
+  const [m, orders, spendRows] = await Promise.all([api("/admin/api/metrics?" + qs), api("/admin/api/orders?" + qs), api("/admin/api/spend")]);
+  const rate = Number($("rate").value) || 1, fee = (Number($("fee").value) || 0) / 100;
+  const ev = (n) => (m.events.find((x) => x.name === n) || {}).u || 0;
+  const sum = (prod, st, f) => m.orders.filter((o) => o.product === prod && (!st || o.status === st)).reduce((a, o) => a + o[f], 0);
+  const cnt = (prod, st) => sum(prod, st, "n");
+
+  const spend = m.spend.spend * rate, imp = m.spend.impressions, clk = m.spend.clicks;
+  const paidE = cnt("ebook", "paid"), paidU = cnt("upsell", "paid");
+  const revenue = sum("ebook", "paid", "paid") + sum("upsell", "paid", "paid");
+  const net = revenue * (1 - fee), profit = net - spend;
+  const createdE = cnt("ebook");
+  const k = $("kpis"); k.replaceChildren(
+    kpi("Gasto (MXN)", mxn(spend)), kpi("Receita (MXN)", mxn(revenue)),
+    kpi("Lucro estimado", mxn(profit), profit >= 0 ? "pos" : "neg"),
+    kpi("ROAS", spend > 0 ? fmt(revenue / spend, 2) + "x" : "—"),
+    kpi("Vendas (ebook)", String(paidE)), kpi("Upsells vendidos", String(paidU)),
+    kpi("CPA (por venda ebook)", paidE ? mxn(spend / paidE) : "—"),
+    kpi("Ticket médio", paidE ? mxn(sum("ebook", "paid", "paid") / paidE) : "—"),
+    kpi("CPM", imp ? mxn(div(spend, imp) * 1000) : "—"),
+    kpi("CTR (link)", pct(clk, imp)), kpi("CPC (link)", clk ? mxn(spend / clk) : "—"),
+    kpi("Custo por abertura do bot", ev("demo_viewed") ? mxn(spend / ev("demo_viewed")) : "—"),
+    kpi("Custo por checkout", createdE ? mxn(spend / createdE) : "—"),
+    kpi("Conv. checkout → pago", pct(paidE, createdE)));
+
+  const steps = [
+    ["Impressões", imp], ["Cliques no link", clk], ["Abriu o bot (demo)", ev("demo_viewed")],
+    ["Viu a oferta", ev("offer_viewed")], ["Gerou CLABE", createdE], ["Pagou", paidE],
+    ["Viu o upsell", ev("upsell_viewed")], ["Comprou upsell", paidU],
+  ];
+  const f = $("funnel"); f.replaceChildren();
+  const top = Math.max(1, ...steps.map((s) => s[1]));
+  steps.forEach(([name, n], i) => {
+    const prev = i ? steps[i - 1][1] : 0;
+    const row = el("div", undefined, "step"); row.append(el("span", name));
+    const bar = el("div", undefined, "bar"), fill = document.createElement("i"); fill.style.width = (n / top) * 100 + "%"; bar.append(fill); row.append(bar);
+    row.append(el("span", fmt(n) + (i && prev ? "  ·  " + pct(n, prev) : ""))); f.append(row);
+  });
+  $("fhint").textContent = "A % ao lado de cada etapa é em relação à etapa de cima. Se você não lançar cliques, a etapa 'Cliques' fica zerada e a % seguinte não aparece.";
+
+  const cb = $("crTbl").tBodies[0]; cb.replaceChildren();
+  const labels = new Set([...(m.byCreative || []).map((c) => c.ct), ...(m.spendByLabel || []).filter((x) => x.label).map((x) => x.label)]);
+  [...labels].forEach((ct) => {
+    const c = (m.byCreative || []).find((x) => x.ct === ct) || { created: 0, paid: 0, revenue: 0 };
+    const s = (m.spendByLabel || []).find((x) => x.label === ct) || { spend: 0, impressions: 0 };
+    const sp2 = s.spend * rate, tr = document.createElement("tr");
+    [ct, sp2 ? mxn(sp2) : "—", s.impressions ? fmt(s.impressions) : "—", String(c.created), String(c.paid), mxn(c.revenue),
+     c.paid && sp2 ? mxn(sp2 / c.paid) : "—", sp2 ? fmt(c.revenue / sp2, 2) + "x" : "—"].forEach((v) => tr.append(el("td", v)));
+    cb.append(tr);
+  });
+
+  const dl = m.delivery;
+  $("deliv").replaceChildren(
+    kpi("Pagos (todos os produtos)", String(dl.paid || 0)), kpi("Baixaram o PDF", String(dl.downloaded || 0) + " · " + pct(dl.downloaded || 0, dl.paid || 0)),
+    kpi("Bot retomou sozinho", String(dl.resumed || 0) + " · " + pct(dl.resumed || 0, dl.paid || 0)),
+    kpi("Purchase enviado à Meta", String(dl.capi || 0) + " · " + pct(dl.capi || 0, dl.paid || 0)));
+
+  const tb = $("ordTbl").tBodies[0]; tb.replaceChildren();
+  orders.forEach((o) => {
+    const tr = document.createElement("tr");
+    tr.append(el("td", o.created_at.slice(5, 16)), el("td", o.id), el("td", o.product === "upsell" ? "Upsell" : "Ebook"));
+    const st = document.createElement("td"); st.append(el("span", o.status, "pill " + o.status)); tr.append(st);
+    tr.append(el("td", mxn(o.status === "paid" ? o.paid_amount : o.amount)), el("td", (o.name || "") + (o.email ? " · " + o.email : "")));
+    tr.append(el("td", o.status === "paid" ? (o.downloads > 0 ? "Sim (" + o.downloads + ")" : "Não") : "—"));
+    tr.append(el("td", o.status === "paid" ? (o.typebot_resumed ? "Sim" : "Não") : "—"), el("td", o.status === "paid" ? (o.capi_sent ? "Sim" : "Não") : "—"));
+    const lk = document.createElement("td");
+    if (o.downloadUrl) { const b = el("button", "Copiar link", "sm"); b.onclick = () => { navigator.clipboard.writeText(o.downloadUrl); b.textContent = "Copiado"; }; lk.append(b); }
+    tr.append(lk); tb.append(tr);
+  });
+
+  const sb = $("spendTbl").tBodies[0]; sb.replaceChildren();
+  spendRows.forEach((r) => {
+    const tr = document.createElement("tr");
+    tr.append(el("td", r.day), el("td", r.label), el("td", fmt(r.spend, 2)), el("td", fmt(r.impressions)), el("td", fmt(r.clicks)));
+    const x = document.createElement("td"); const b = el("button", "Apagar", "sm");
+    b.onclick = async () => { if (confirm("Apagar este lançamento?")) { await api("/admin/api/spend/" + r.id, { method: "DELETE" }); refresh(); } };
+    x.append(b); tr.append(x); sb.append(tr);
+  });
+}
+
+$("sAdd").onclick = async () => {
+  const body = { day: $("sDay").value, label: $("sLabel").value, spend: $("sSpend").value, impressions: $("sImp").value, clicks: $("sClk").value };
+  if (!body.day || !(Number(body.spend) > 0)) { alert("Preencha o dia e o gasto."); return; }
+  await api("/admin/api/spend", { method: "POST", body: JSON.stringify(body) });
+  ["sLabel", "sSpend", "sImp", "sClk"].forEach((i) => ($(i).value = ""));
+  refresh();
+};
+
+function start() { $("login").classList.add("hide"); $("app").classList.remove("hide"); $("sDay").value = todayLocal(); setRange(0); }
+if (KEY) fetch("/admin/api/spend", { headers: { "x-admin-key": KEY } }).then((r) => r.status === 401 ? sessionStorage.removeItem("ak") : start());
+</script>
+</body>
+</html>
