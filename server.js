@@ -89,7 +89,7 @@ app.post("/api/orders", botKey, async (req, res) => {
   q.insert.run({ id, product, parent_id: b.parentOrderId || null, result_id: b.resultId || null, country: b.country || "MX", amount,
     name: b.name || null, email: b.email || null, phone: b.phone || null, consent: /s[ií]/i.test(String(b.consent || "")) ? 1 : 0,
     utm: JSON.stringify({ s: b.utm_source, m: b.utm_medium, c: b.utm_campaign, ct: b.utm_content, t: b.utm_term,
-      cid: b.campaign_id, aid: b.adset_id, adid: b.ad_id, pl: b.placement }),
+      cid: b.campaign_id, aid: b.adset_id, adid: b.ad_id, pl: b.placement, tt: b.ttclid, ttp: b.ttp }),
     fbc: b.fbclid ? `fb.1.${Date.now()}.${b.fbclid}` : null });
   try {
     const ch = await provider.createSpeiCharge({ orderId: id, amount, currency: "MXN", name: b.name, email: b.email, description: P.name });
@@ -111,7 +111,7 @@ app.post("/api/events", botKey, (req, res) => {
   const { name, orderId, resultId } = req.body || {};
   if (!EV.has(name)) return res.status(400).json({ error: "invalid_event" });
   q.event.run(orderId || null, resultId || null, name, "{}");
-  if (name === "checkout_started" && orderId) sendCapi(orderId, "InitiateCheckout").catch(() => {});
+  if (name === "checkout_started" && orderId) { sendCapi(orderId, "InitiateCheckout").catch(() => {}); sendTikTok(orderId, "InitiateCheckout").catch(() => {}); }
   res.json({ ok: true });
 });
 
@@ -151,7 +151,7 @@ async function applyPayment(o, ev) {
   q.paid.run(paid, ev.txId || null, token(), o.id);
   q.event.run(o.id, o.result_id, "purchase_approved", JSON.stringify({ paid, tx: ev.txId }));
   const fresh = q.get.get(o.id);
-  await Promise.allSettled([resumeTypebot(fresh), sendCapi(o.id, "Purchase")]);
+  await Promise.allSettled([resumeTypebot(fresh), sendCapi(o.id, "Purchase"), sendTikTok(o.id, "CompletePayment")]);
 }
 
 // ---------- 5) Descarga protegida ----------
@@ -201,6 +201,30 @@ async function sendCapi(orderId, eventName) {
   const r = await fetch(`https://graph.facebook.com/${env.META_API_VERSION || "v21.0"}/${env.META_PIXEL_ID}/events?access_token=${env.META_CAPI_TOKEN}`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (r.ok && eventName === "Purchase") q.flag("capi_sent").run(o.id);
+}
+
+// TikTok Events API (server-side). Requiere TIKTOK_PIXEL_CODE y TIKTOK_EVENTS_TOKEN.
+async function sendTikTok(orderId, eventName) {
+  if (!env.TIKTOK_PIXEL_CODE || !env.TIKTOK_EVENTS_TOKEN) return;
+  const o = q.get.get(orderId);
+  if (!o) return;
+  let u = {}; try { u = JSON.parse(o.utm || "{}"); } catch {}
+  const user = { external_id: sha256(o.email || o.id) };
+  if (o.email) user.email = sha256(o.email);
+  if (o.phone) { let ph = String(o.phone).replace(/\D/g, "").replace(/^0+/, ""); if (ph.length === 10) ph = "52" + ph; if (ph.length >= 10) user.phone_number = sha256("+" + ph); }
+  if (u.tt) user.ttclid = u.tt;
+  if (u.ttp) user.ttp = u.ttp;
+  const value = eventName === "CompletePayment" ? (o.paid_amount || o.amount) : o.amount;
+  const body = { event_source: "web", event_source_id: env.TIKTOK_PIXEL_CODE,
+    ...(env.TIKTOK_TEST_EVENT_CODE ? { test_event_code: env.TIKTOK_TEST_EVENT_CODE } : {}),
+    data: [{ event: eventName, event_time: Math.floor(Date.now() / 1000), event_id: `${o.id}-${eventName}`, user,
+      page: { url: env.FUNNEL_URL },
+      properties: { currency: "MXN", value, content_type: "product", content_name: PRODUCTS[o.product].name, content_id: o.product,
+        contents: [{ content_id: o.product, content_name: PRODUCTS[o.product].name, quantity: 1, price: value }] } }] };
+  const r = await fetch("https://business-api.tiktok.com/open_api/v1.3/event/track/",
+    { method: "POST", headers: { "Content-Type": "application/json", "Access-Token": env.TIKTOK_EVENTS_TOKEN }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  q.event.run(o.id, o.result_id || null, "tiktok_" + eventName, JSON.stringify({ ok: j.code === 0, code: j.code, msg: String(j.message || "").slice(0, 120) }));
 }
 
 app.get("/api/report", botKey, (_req, res) => res.json({
